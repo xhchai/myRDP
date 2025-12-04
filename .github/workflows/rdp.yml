@@ -42,10 +42,10 @@ jobs:
           echo "RDP_USER=$user" >> $env:GITHUB_ENV
           echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
 
-      # 2025 年 12 月 4 日 100% 可用的 Tailscale 下載鏈接
+      # 2025 年 12 月最新 Tailscale MSI (amd64 版，從官方 pkgs.tailscale.com/stable)
       - name: Install Tailscale
         run: |
-          $url = "https://pkgs.tailscale.com/stable/Tailscale-1.82.1-amd64.msi"
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.88.4-amd64.msi"
           $out = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
           Start-Process msiexec.exe -ArgumentList "/i", $out, "/quiet", "/norestart" -Wait
@@ -66,7 +66,6 @@ jobs:
           }
           if(-not $env:TAILSCALE_IP) { Write-Error "No IP"; exit 1 }
 
-      # 正確的 artifact 版本 v4
       - name: Upload Fake Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -76,18 +75,7 @@ jobs:
 
       - name: Send to Telegram
         run: |
-          $text = @"
-新 Windows 雲電腦已上線（自動續命）
-
-IP     : $($env:TAILSCALE_IP)
-用戶名 : $($env:RDP_USER)
-密碼   : $($env:RDP_PASS)
-
-時間   : $(Get-Date -Format "yyyy-MM-dd HH:mm:ss") UTC
-Run    : #${{ github.run_id }}
-
-直接用 RDP 客戶端連 $($env:TAILSCALE_IP):3389
-"@
+          $text = "新 Windows 雲電腦已上線（自動續命）`n`nIP     : $($env:TAILSCALE_IP)`n用戶名 : $($env:RDP_USER)`n密碼   : $($env:RDP_PASS)`n`n時間   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') UTC`nRun    : #${{ github.run_id }}`n`n直接用 RDP 客戶端連 $($env:TAILSCALE_IP):3389"
           $text = [uri]::EscapeDataString($text)
           iwr "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TG_CHAT_ID }}&text=$text" -UseBasicParsing | Out-Null
 
