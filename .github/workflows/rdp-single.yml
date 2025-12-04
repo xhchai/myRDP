@@ -1,0 +1,96 @@
+name: RDP Single Instance
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance:
+        description: 'Instance number'
+        required: true
+        default: '1'
+      tskey:
+        description: 'Tailscale Key'
+        required: true
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET Fake CI
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build Fake App
+        run: |
+          New-Item -ItemType Directory -Path FakeBuild -Force
+          Set-Location FakeBuild
+          dotnet new console -n KeepAliveApp --force
+          Set-Location KeepAliveApp
+          (Get-Content Program.cs) -replace 'Hello, World!', 'GitHub Actions Farm Instance ${{ inputs.instance }} - Build ${{ github.run_id }} - $(Get-Date)' | Set-Content Program.cs
+          dotnet publish -c Release -o ../publish -p:UseAppHost=false
+          "Build $(Get-Date) for Instance ${{ inputs.instance }}" | Out-File -FilePath ../publish/info.txt
+
+      - name: Enable RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP-Farm-${{ inputs.instance }}-$(Get-Random)" dir=in action=allow protocol=TCP localport=3389
+
+      - name: Create Random User
+        run: |
+          $u = "u$(Get-Random -Min 10000 -Max 99999)-inst${{ inputs.instance }}"
+          $p = -join ((33..126) | Get-Random -Count 28 | % {[char]$_})
+          $s = ConvertTo-SecureString $p -AsPlainText -Force
+          New-LocalUser $u -Password $s -FullName "FarmUser" -Description "auto-inst${{ inputs.instance }}"
+          Add-LocalGroupMember -Group "Administrators" -Member $u
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u
+          echo "USER=$u" >> $env:GITHUB_ENV
+          echo "PASS=$p" >> $env:GITHUB_ENV
+
+      - name: Install & Start Tailscale
+        run: |
+          iwr https://pkgs.tailscale.com/stable/Tailscale-latest-amd64.msi -OutFile "$env:TEMP\ts.msi"
+          Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ inputs.tskey }} --hostname="farm-${{ inputs.instance }}-${{ github.run_id }}" --accept-routes=false
+          for($i=0; $i -lt 25; $i++) { $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip --4 2>$null; if($ip) { echo "IP=$ip" >> $env:GITHUB_ENV; break }; Start-Sleep 6 }
+
+      - name: Upload Fake Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-farm-${{ inputs.instance }}-${{ github.run_id }}
+          path: FakeBuild/publish/**
+          retention-days: 2
+
+      - name: Send to Telegram
+        run: |
+          $msg = @"
+🟢 新雲電腦 #${{ inputs.instance }} 已就緒
+
+🖥️ IP: $($env:IP)
+👤 User: $($env:USER)
+🔑 Pass: $($env:PASS)
+
+⏰ 時間: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss") UTC
+Run ID: #${{ github.run_id }}
+"@
+          $encodedMsg = [uri]::EscapeDataString($msg)
+          iwr "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TG_CHAT_ID }}&text=$encodedMsg&parse_mode=Markdown" -UseBasicParsing | Out-Null
+          Write-Host "推送成功到 Telegram (Instance ${{ inputs.instance }})"
+
+      - name: Keep-Alive & Auto-Renew
+        run: |
+          Write-Host "Instance ${{ inputs.instance }} 啟動成功，將自動續命"
+          $c = 0
+          while($true) {
+            $c++
+            $delay = Get-Random -Minimum 14400 -Maximum 32400  # 4-9 小時
+            if($c -eq 1) {
+              Start-Sleep -Seconds (Get-Random -Minimum 600 -Maximum 1200)
+              # 觸發新實例接班
+              iwr -Uri "https://api.github.com/repos/${{ github.repository }}/dispatches" -Method POST -Headers @{ Authorization = "token ${{ secrets.AUTO_RESTART_PAT }}" } -ContentType "application/json" -Body '{"event_type":"restart-farm"}'
+            }
+            Start-Sleep -Seconds $delay
+          }
