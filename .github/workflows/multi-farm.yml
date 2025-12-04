@@ -1,0 +1,20 @@
+name: Multi Windows Farm (5 台)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  start-all:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 啟動 5 台獨立 Windows
+        run: |
+          echo "正在啟動 5 台獨立雲電腦..."
+          for i in 1 2 3 4 5; do
+            curl -X POST https://api.github.com/repos/${{ github.repository }}/actions/workflows/single-rdp.yml/dispatches \
+              -H "Authorization: token ${{ secrets.AUTO_RESTART_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"instance\":\"$i\",\"tskey\":\"${{ secrets.TS_KEY_1 }}\"}}" || true
+            sleep 8
+          done
+          echo "5 台全部觸發完成！"
