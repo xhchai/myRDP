@@ -9,9 +9,9 @@ jobs:
   start:
     runs-on: ubuntu-latest
     steps:
-      - name: Launch New Windows
+      - name: Launch New Windows Runner
         run: |
-          sleep $(( $RANDOM % 90 ))
+          sleep $(( $RANDOM % 120 ))
           curl -X POST https://api.github.com/repos/${{ github.repository }}/actions/workflows/rdp.yml/dispatches \
             -H "Authorization: token ${{ secrets.AUTO_RESTART_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
