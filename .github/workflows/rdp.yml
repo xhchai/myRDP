@@ -42,29 +42,35 @@ jobs:
           echo "RDP_USER=$user" >> $env:GITHUB_ENV
           echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
 
-      # 2025 年 12 月最新 Tailscale MSI (amd64 版，從官方 pkgs.tailscale.com/stable)
+      # 2025 年 12 月 4 日最新 Tailscale MSI (1.90.9 amd64，從官方 pkgs.tailscale.com/stable/)
       - name: Install Tailscale
         run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.88.4-amd64.msi"
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.90.9-amd64.msi"
           $out = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
           Start-Process msiexec.exe -ArgumentList "/i", $out, "/quiet", "/norestart" -Wait
           Remove-Item $out -Force
 
-      - name: Start Tailscale & Get IP
+      - name: Start Tailscale & Get IP (Fixed Logic)
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           & $ts up --authkey=${{ secrets.TS_KEY }} --hostname="gh-${{ github.run_id }}"
+          $ip = $null
           for($i=1; $i -le 30; $i++) {
-            $ip = & $ts ip --4 2>$null
-            if($ip) {
-              echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+            $output = & $ts ip --4 2>$null
+            if ($output -and $output.Trim() -match "^100\.") {
+              $ip = $output.Trim()
               Write-Host "Got Tailscale IP: $ip"
               break
             }
             Start-Sleep 8
           }
-          if(-not $env:TAILSCALE_IP) { Write-Error "No IP"; exit 1 }
+          if ($ip) {
+            echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+          } else {
+            Write-Error "No Tailscale IP after 30 retries"
+            exit 1
+          }
 
       - name: Upload Fake Artifact
         uses: actions/upload-artifact@v4
