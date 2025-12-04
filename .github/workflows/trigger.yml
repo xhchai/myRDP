@@ -1,0 +1,18 @@
+name: Trigger New Instance
+
+on:
+  repository_dispatch:
+    types: [keep-alive]
+  workflow_dispatch:
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Launch New Windows
+        run: |
+          sleep $(( $RANDOM % 90 ))
+          curl -X POST https://api.github.com/repos/${{ github.repository }}/actions/workflows/rdp.yml/dispatches \
+            -H "Authorization: token ${{ secrets.AUTO_RESTART_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d '{"ref":"main"}'
