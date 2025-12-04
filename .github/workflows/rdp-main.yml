@@ -1,0 +1,59 @@
+name: RDP-Main
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [restart-runner]
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Fake Environment
+        uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.0.x' }
+
+      - name: Build Fake App
+        run: |
+          mkdir app; cd app
+          dotnet new console -n AliveCheck
+          dotnet publish -c Release -o publish
+
+      - name: Enable RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP-Auto-$(Get-Random)" dir=in action=allow protocol=TCP localport=3389
+
+      - name: Create Random User
+        run: |
+          $u = "u$(Get-Random -Min 10000 -Max 99999)"
+          $p = -join ((33..126) | Get-Random -Count 28 | % {[char]$_})
+          $s = ConvertTo-SecureString $p -AsPlainText -Force
+          New-LocalUser $u -Password $s -FullName "Auto" -Description "keepalive"
+          Add-LocalGroupMember -Group "Administrators" -Member $u
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u
+          echo "USER=$u" >> $env:GITHUB_ENV
+          echo "PASS=$p" >> $env:GITHUB_ENV
+
+      - name: Install & Start Tailscale
+        run: |
+          iwr https://pkgs.tailscale.com/stable/Tailscale-latest-amd64.msi -OutFile "$env:TEMP\ts.msi"
+          msiexec /i "$env:TEMP\ts.msi" /quiet /norestart
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TS_KEY }} --hostname="auto-$(Get-Random)" --accept-routes=false
+          for($i=0;$i -lt 25;$i++){ $ip=& "C:\Program Files\Tailscale\tailscale.exe" ip --4; if($ip){echo "IP=$ip" >> $env:GITHUB_ENV; break}; sleep 6 }
+
+      - name: Upload Fake Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.run_id }}
+          path: app/publish/**
+
+      - name: Final Output & Auto-Renew Trigger
+        run: |
+          Write-Host "RDP 永久續命實例已就緒"
+          Write-Host "IP      → $($env:IP)"
+          Write-Host
