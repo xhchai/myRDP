@@ -1,0 +1,19 @@
+name: Auto-Restart Trigger
+
+on:
+  repository_dispatch:
+    types: [restart-runner]
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger New Windows Instance
+        run: |
+          echo "收到續命信號 → 啟動新 Windows Runner"
+          sleep $((RANDOM % 30))   # 隨機延遲避風頭
+          curl -X POST https://api.github.com/repos/${{ github.repository }}/actions/workflows/rdp-main.yml/dispatches \
+            -H "Authorization: token ${{ secrets.AUTO_RESTART_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d '{"ref":"main"}'
