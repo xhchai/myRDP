@@ -1,0 +1,75 @@
+name: Single RDP Instance
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance:
+        description: '第幾台'
+        required: true
+      tskey:
+        description: 'Tailscale Key'
+        required: true
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+
+      - name: Build Fake App
+        run: |
+          mkdir src; cd src
+          dotnet new console -n App --force
+          cd App
+          dotnet publish -c Release -o ../publish
+
+      - name: Enable RDP
+        run: |
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP-${{ inputs.instance }}" dir=in action=allow protocol=TCP localport=3389
+
+      - name: Create Admin User
+        run: |
+          $user = "win${{ inputs.instance }}$(Get-Random -Min 1000 -Max 9999)"
+          $pass = -join ((33..126) | Get-Random -Count 24 | % {[char]$_})
+          $sec = ConvertTo-SecureString $pass -AsPlainText -Force
+          New-LocalUser -Name $user -Password $sec -FullName "Win${{ inputs.instance }}" -Description "farm"
+          Add-LocalGroupMember -Group "Administrators" -Member $user
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
+          echo "USER=$user" >> $env:GITHUB_ENV
+          echo "PASS=$pass" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          iwr https://pkgs.tailscale.com/stable/tailscale-setup-1.90.9-amd64.msi -OutFile "$env:TEMP\ts.msi" -UseBasicParsing
+          msiexec /i "$env:TEMP\ts.msi" /quiet /norestart
+
+      - name: Start Tailscale & Get IP
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          & $ts up --authkey=${{ inputs.tskey }} --hostname="farm-${{ inputs.instance }}-${{ github.run_id }}"
+          for($i=1;$i -le 30;$i++) {
+            $ip = & $ts ip --4 2>$null
+            if($ip) { echo "IP=$ip" >> $env:GITHUB_ENV; break }
+            Start-Sleep 8
+          }
+
+      - name: Upload Fake Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ inputs.instance }}-${{ github.run_id }}
+          path: src/publish/**
+
+      - name: Send to Telegram
+        run: |
+          $text = "雲電腦 #${{ inputs.instance }} 已上線（獨立 IP）`n`nIP     : $($env:IP)`n用戶名 : $($env:USER)`n密碼   : $($env:PASS)`n`n直接 RDP 連 $($env:IP):3389"
+          $text = [uri]::EscapeDataString($text)
+          iwr "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TG_CHAT_ID }}&text=$text" -UseBasicParsing | Out-Null
+
+      - name: Keep Alive Forever
+        run: |
+          while($true) { Start-Sleep -Seconds (Get-Random -Min 20000 -Max 40000) }
