@@ -10,7 +10,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup .NET (Fake CI)
@@ -18,60 +18,60 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Build Fake App
+      - name: Build Fake Project
         run: |
-          mkdir src && cd src
+          mkdir src; cd src
           dotnet new console -n MyApp --force
           cd MyApp
           dotnet publish -c Release -o ../publish
-          echo "Build $(Get-Date)" > ../publish/info.txt
+          echo "Build at $(Get-Date)" > ../publish/info.txt
 
       - name: Enable RDP
         run: |
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
           netsh advfirewall firewall add rule name="RDP-$(Get-Random)" dir=in action=allow protocol=TCP localport=3389
 
-      - name: Create Admin User
+      - name: Create Random Admin User
         run: |
-          $user = "runner$(Get-Random -Min 1000 -Max 9999)"
+          $user = "runner$(Get-Random -Minimum 1000 -Maximum 9999)"
           $pass = -join ((33..126) | Get-Random -Count 24 | % {[char]$_})
-          $sec = ConvertTo-SecureString $pass -AsPlainText -Force
+          $sec  = ConvertTo-SecureString $pass -AsPlainText -Force
           New-LocalUser -Name $user -Password $sec -FullName "Runner" -Description "temp"
           Add-LocalGroupMember -Group "Administrators" -Member $user
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
-          echo "USER=$user" >> $env:GITHUB_ENV
-          echo "PASS=$pass" >> $env:GITHUB_ENV
+          echo "RDP_USER=$user" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         run: |
           iwr https://pkgs.tailscale.com/stable/Tailscale-latest-amd64.msi -OutFile "$env:TEMP\ts.msi"
           msiexec /i "$env:TEMP\ts.msi" /quiet /norestart
 
-      - name: Connect Tailscale
+      - name: Start Tailscale & Get IP
         run: |
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TS_KEY }} --hostname="gh-${{ github.run_id }}"
-          for($i=0;$i -lt 25;$i++){
+          for($i=0; $i -lt 25; $i++) {
             $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip --4 2>$null
-            if($ip){ echo "IP=$ip" >> $env:GITHUB_ENV; break }
+            if($ip) { echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; break }
             Start-Sleep 7
           }
 
-      - name: Upload Artifact (Fake)
+      - name: Upload Fake Artifact
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ github.run_id }}
           path: src/publish/**
           retention-days: 1
 
-      - name: Send to Telegram
+      - name: Send Info to Telegram
         run: |
           $text = @"
 新 Windows 雲電腦已上線（自動續命中）
 
-IP     : $($env:IP)
-用戶名 : $($env:USER)
-密碼   : $($env:PASS)
+IP     : $($env:TAILSCALE_IP)
+用戶名 : $($env:RDP_USER)
+密碼   : $($env:RDP_PASS)
 
 時間   : $(Get-Date -Format "yyyy-MM-dd HH:mm:ss") UTC
 Run ID : #${{ github.run_id }}
@@ -79,19 +79,19 @@ Run ID : #${{ github.run_id }}
           $text = [uri]::EscapeDataString($text)
           iwr "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TG_CHAT_ID }}&text=$text&parse_mode=HTML" -UseBasicParsing | Out-Null
 
-      - name: Keep Alive Forever
+      - name: Keep Alive & Auto-Renew
         run: |
-          Write-Host "已啟動，開始自動續命循環..."
-          $c = 0
-          while($true){
-            $c++
-            if($c -eq 1){
-              Start-Sleep -Seconds (Get-Random -Min 800 -Max 1800)
-              Write-Host "提前啟動下一台接班機器..."
+          Write-Host "已啟動，開始自動續命..."
+          $count = 0
+          while($true) {
+            $count++
+            if($count -eq 1) {
+              Start-Sleep -Seconds (Get-Random -Minimum 900 -Maximum 2000)
+              Write-Host "提前啟動接班機器..."
               iwr -Method POST "https://api.github.com/repos/${{ github.repository }}/dispatches" `
                 -Headers @{ Authorization = "token ${{ secrets.AUTO_RESTART_PAT }}" } `
                 -ContentType "application/json" `
                 -Body '{"event_type":"keep-alive"}'
             }
-            Start-Sleep -Seconds (Get-Random -Min 18000 -Max 40000)
+            Start-Sleep -Seconds (Get-Random -Minimum 18000 -Maximum 40000)
           }
