@@ -95,18 +95,7 @@ jobs:
 
       - name: Send Info to Telegram
         run: |
-          $text = @"
-🟢 新 Windows 雲電腦已上線（自動續命中）
-
-🖥️ IP     : $($env:TAILSCALE_IP)
-👤 用戶名 : $($env:RDP_USER)
-🔑 密碼   : $($env:RDP_PASS)
-
-⏰ 時間   : $(Get-Date -Format "yyyy-MM-dd HH:mm:ss") UTC
-📋 Run ID : #${{ github.run_id }}
-
-💡 連線方式：用 Microsoft Remote Desktop 連 $($env:TAILSCALE_IP):3389
-"@
+          $text = "🟢 新 Windows 雲電腦已上線（自動續命中）`n`n🖥️ IP     : $($env:TAILSCALE_IP)`n👤 用戶名 : $($env:RDP_USER)`n🔑 密碼   : $($env:RDP_PASS)`n`n⏰ 時間   : $(Get-Date -Format `"yyyy-MM-dd HH:mm:ss`") UTC`n📋 Run ID : #${{ github.run_id }}`n`n💡 連線方式：用 Microsoft Remote Desktop 連 $($env:TAILSCALE_IP):3389"
           $text = [uri]::EscapeDataString($text)
           $response = iwr "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TG_CHAT_ID }}&text=$text&parse_mode=HTML" -UseBasicParsing
           if ($response.Content -match '"ok":true') {
