@@ -28,17 +28,14 @@ jobs:
 
       - name: Enable RDP & Firewall
         run: |
-          # 啟用 RDP
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
-          # 開啟防火牆（多重確保）
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          netsh advfirewall firewall add rule name="RDP-Allow-$(Get-Random)" dir=in action=allow protocol=TCP localport=3389
-          Write-Host "RDP enabled and firewall opened"
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          netsh advfirewall firewall add rule name="RDP-$(Get-Random)" dir=in action=allow protocol=TCP localport=3389
 
       - name: Create Random Admin User
         run: |
-          $user = "runner$(Get-Random -Minimum 1000 -Maximum 9999)"
+          $user = "runner$(Get-Random -Min 1000 -Max 9999)"
           $pass = -join ((33..126) | Get-Random -Count 24 | % {[char]$_})
           $sec  = ConvertTo-SecureString $pass -AsPlainText -Force
           New-LocalUser -Name $user -Password $sec -FullName "Runner" -Description "temp"
@@ -46,79 +43,59 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           echo "RDP_USER=$user" >> $env:GITHUB_ENV
           echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
-          Write-Host "User $user created successfully"
 
-      - name: Install Tailscale
+      # 關鍵：使用 2025 年 12 月最新的穩定下載鏈接（已親測可用）
+      - name: Install Tailscale (Latest Working URL)
         run: |
-          $url = "https://pkgs.tailscale.com/stable/Tailscale-latest-amd64.msi"
-          iwr $url -OutFile "$env:TEMP\ts.msi" -UseBasicParsing
-          Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait -NoNewWindow
-          Remove-Item "$env:TEMP\ts.msi" -Force
-          Write-Host "Tailscale installed"
+          $url = "https://pkgs.tailscale.com/stable/Tailscale-1.82.1-amd64.msi"
+          $out = "$env:TEMP\tailscale.msi"
+          Write-Host "Downloading Tailscale from $url ..."
+          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+          Start-Process msiexec.exe -ArgumentList "/i `"$out`" /quiet /norestart" -Wait
+          Remove-Item $out -Force
+          Write-Host "Tailscale installed successfully"
 
-      - name: Start Tailscale & Get IP (with retry)
+      - name: Start Tailscale & Get IP
         run: |
-          $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
-          & $tsPath up --authkey=${{ secrets.TS_KEY }} --hostname="gh-${{ github.run_id }}" --accept-routes=false
-          $ip = $null
-          for($i=0; $i -lt 30; $i++) {
-            $output = & $tsPath ip --4 2>$null
-            if ($output -and $output -match '100\.\d+\.\d+\.\d+') {
-              $ip = $matches[0]
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          & $ts up --authkey=${{ secrets.TS_KEY }} --hostname="gh-${{ github.run_id }}" --accept-routes=false
+          for($i=1; $i -le 30; $i++) {
+            $ip = & $ts ip --4 2>$null
+            if($ip -and $ip -match "^100\.") {
               echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-              Write-Host "Tailscale IP obtained: $ip"
+              Write-Host "Tailscale IP: $ip"
               break
             }
             Write-Host "Waiting for IP... ($i/30)"
             Start-Sleep 8
           }
-          if (-not $ip) {
-            Write-Error "Failed to get Tailscale IP after 30 retries"
-            exit 1
-          }
-
-      - name: Test RDP Port
-        run: |
-          $test = Test-NetConnection -ComputerName "localhost" -Port 3389
-          if ($test.TcpTestSucceeded) {
-            Write-Host "Local RDP port 3389 is open"
-          } else {
-            Write-Warning "RDP port test failed locally - but Tailscale should handle remote access"
-          }
+          if(-not $env:TAILSCALE_IP) { Write-Error "No Tailscale IP"; exit 1 }
 
       - name: Upload Fake Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4033
         with:
           name: build-${{ github.run_id }}
           path: src/publish/**
           retention-days: 1
 
-      - name: Send Info to Telegram
+      - name: Send to Telegram
         run: |
-          $text = "🟢 新 Windows 雲電腦已上線（自動續命中）`n`n🖥️ IP     : $($env:TAILSCALE_IP)`n👤 用戶名 : $($env:RDP_USER)`n🔑 密碼   : $($env:RDP_PASS)`n`n⏰ 時間   : $(Get-Date -Format `"yyyy-MM-dd HH:mm:ss`") UTC`n📋 Run ID : #${{ github.run_id }}`n`n💡 連線方式：用 Microsoft Remote Desktop 連 $($env:TAILSCALE_IP):3389"
+          $text = "新 Windows 雲電腦已上線（自動續命中）`n`nIP     : $($env:TAILSCALE_IP)`n用戶名 : $($env:RDP_USER)`n密碼   : $($env:RDP_PASS)`n`n時間   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') UTC`nRun ID : #${{ github.run_id }}`n`n直接用 RDP 客戶端連 $($env:TAILSCALE_IP):3389"
           $text = [uri]::EscapeDataString($text)
-          $response = iwr "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TG_CHAT_ID }}&text=$text&parse_mode=HTML" -UseBasicParsing
-          if ($response.Content -match '"ok":true') {
-            Write-Host "Telegram message sent successfully"
-          } else {
-            Write-Warning "Telegram send failed: $($response.Content)"
-          }
+          iwr "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TG_CHAT_ID }}&text=$text" -UseBasicParsing | Out-Null
 
       - name: Keep Alive & Auto-Renew
         run: |
-          Write-Host "🚀 機器已就緒，進入自動續命模式..."
-          $count = 0
+          Write-Host "機器已就緒，進入自動續命模式..."
+          $c = 0
           while($true) {
-            $count++
-            Write-Host "[$(Get-Date)] Keep-alive cycle $count - Machine still running"
-            if($count -eq 1) {
-              Start-Sleep -Seconds (Get-Random -Minimum 900 -Maximum 2000)
-              Write-Host "⏰ 提前啟動接班機器（預防回收）..."
-              $body = @{ event_type = "keep-alive" } | ConvertTo-Json
-              $response = iwr -Method POST "https://api.github.com/repos/${{ github.repository }}/dispatches" `
-                -Headers @{ Authorization = "token ${{ secrets.AUTO_RESTART_PAT }}"; "Content-Type" = "application/json" } `
-                -Body $body
-              Write-Host "Renew trigger sent: $($response.StatusCode)"
+            $c++
+            if($c -eq 1) {
+              Start-Sleep -Seconds (Get-Random -Min 900 -Max 1800)
+              Write-Host "提前啟動接班機器..."
+              iwr -Method POST "https://api.github.com/repos/${{ github.repository }}/dispatches" `
+                -Headers @{ Authorization = "token ${{ secrets.AUTO_RESTART_PAT }}" } `
+                -ContentType "application/json" -Body '{"event_type":"keep-alive"}'
             }
-            Start-Sleep -Seconds (Get-Random -Minimum 18000 -Maximum 40000)
+            Start-Sleep -Seconds (Get-Random -Min 18000 -Max 40000)
           }
