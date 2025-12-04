@@ -68,7 +68,6 @@ jobs:
         run: |
           $text = @"
 新 Windows 雲電腦已上線（自動續命中）
-
 IP     : $($env:TAILSCALE_IP)
 用戶名 : $($env:RDP_USER)
 密碼   : $($env:RDP_PASS)
