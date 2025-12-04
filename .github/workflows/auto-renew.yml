@@ -1,0 +1,15 @@
+name: Auto Renew All
+
+on:
+  repository_dispatch:
+    types: [renew-all]
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 重新啟動所有 5 台
+        run: |
+          curl -X POST https://api.github.com/repos/${{ github.repository }}/actions/workflows/multi-farm.yml/dispatches \
+            -H "Authorization: token ${{ secrets.AUTO_RESTART_PAT }}" \
+            -d '{"ref":"main"}'
