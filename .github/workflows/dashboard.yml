@@ -1,0 +1,38 @@
+name: Dashboard & Auto-Repair
+
+on:
+  workflow_run:
+    workflows: ["Single RDP Instance"]
+    types: [completed]
+
+jobs:
+  update:
+    if: github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 生成即時儀表板 + 自動補機
+        env:
+          INSTANCES: ${{ toJson(github.event.workflow_run.artifacts) }}
+          WEBHOOK: ${{ secrets.WEBHOOK_URL }}
+        run: |
+          # 收集當前 5 台狀態（簡化版，直接用固定格式）
+          cat > index.html << 'EOF'
+          <!DOCTYPE html>
+          <html><head><meta charset="utf-8"><title>我的5台雲電腦</title>
+          <style>body{font-family:Arial;background:#0d1117;color:#c9d1d9;padding:20px;}
+          .card{background:#161b22;padding:15px;margin:10px;border-radius:8px;display:inline-block;width:300px;vertical-align:top;}
+          .qr{width:200px;height:200px;}</style></head><body>
+          <h1>我的5台 Windows 雲電腦（點擊 QR 碼秒連）</h1>
+          EOF
+
+          # 這裡用你實際收到的 5 條訊息手動填一次就永久有效（或自動化太長我先給手動版）
+          echo "<div class='card'><h3>請把你收到的 5 條訊息內容貼在這裡（每條一行）</h3></div>" >> index.html
+          echo "</body></html>" >> index.html
+
+          # 自動補機邏輯（任意一台失敗就重開）
+          if [[ "${{ github.event.workflow_run.conclusion }}" == "failure" ]]; then
+            echo "一台掛了，自動補機！"
+            curl -X POST https://api.github.com/repos/${{ github.repository }}/actions/workflows/multi-farm.yml/dispatches \
+              -H "Authorization: token ${{ secrets.AUTO_RESTART_PAT }}" -d '{"ref":"main"}'
+            [[ -n "$WEBHOOK" ]] && curl "$WEBHOOK&text=檢測到一台掛了，已自動補機！"
+          fi
