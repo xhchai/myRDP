@@ -35,4 +35,4 @@ jobs:
           curl -X POST https://api.github.com/repos/${{ github.repository }}/actions/workflows/rdp-single.yml/dispatches \
             -H "Authorization: token ${{ secrets.AUTO_RESTART_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            -d '{"ref":"main", "inputs": {"instance": "5", "tskey": "${{ secrets.TS_KEY_5 }}"}}'
+            -d '{"ref":"main", "inputs": {"instance": "5", "tskey": "${{ secrets.TS_KEY_5 }}"}}' 
